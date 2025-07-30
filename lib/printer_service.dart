@@ -1,5 +1,6 @@
 // ignore_for_file: avoid_print
 
+import 'package:flutter/material.dart';
 import 'package:telpo_flutter_sdk/telpo_flutter_sdk.dart';
 
 class PrinterService {
@@ -8,27 +9,50 @@ class PrinterService {
   PrinterService._internal();
 
   final TelpoFlutterChannel _printer = TelpoFlutterChannel();
+  bool _isConnected = false;
+  bool _isConnecting = false;
 
-  Future<bool> connect() async {
+   Future<bool> _safeCall(Future<bool> Function() fn) async {
     try {
-      final result = await _printer.connect();
-      print("🔌 Connection result: $result");
-      return result == true;
+      return await fn().timeout(const Duration(seconds: 5), onTimeout: () {
+        _isConnected = false;
+        return false;
+      });
     } catch (e) {
-      print("❌ Connection error: $e");
+      _isConnected = false;
       return false;
     }
   }
 
+  Future<bool> connect() async {
+    if (_isConnecting) return false;
+    _isConnecting = true;
+    
+    _isConnected = await _safeCall(() async {
+      await disconnect(); // Clean up any existing connection
+      final result = await _printer.connect();
+      return result ?? false;
+    });
+    
+    _isConnecting = false;
+    return _isConnected;
+  }
+
   Future<bool> isConnected() async {
-    try {
-      final result = await _printer.isConnected() ?? false;
-      print("✅ isConnected check: $result");
-      return result;
-    } catch (e) {
-      print("❌ isConnected error: $e");
-      return false;
-    }
+    return await _safeCall(() async {
+      if (!_isConnected) return false;
+      final result = await _printer.isConnected();
+      _isConnected = result ?? false;
+      return _isConnected;
+    });
+  }
+
+  Future<void> disconnect() async {
+    await _safeCall(() async {
+      await _printer.disconnect();
+      _isConnected = false;
+      return true;
+    });
   }
 
   Future<PrintResult> printReceipt({
@@ -40,6 +64,10 @@ class PrinterService {
     required String date,
     required String cashier,
   }) async {
+    if (!_isConnected) {
+      final reconnected = await connect();
+      if (!reconnected) return PrintResult.other;
+    }
     print("🔔 Building print sheet...");
 
     final sheet = TelpoPrintSheet();
